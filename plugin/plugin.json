@@ -1,0 +1,32 @@
+{
+  "manifestVersion": 1,
+  "id": "com.leeoohoo.notepad",
+  "providerAppId": "notepad",
+  "name": "记事本",
+  "version": "0.1.0",
+  "description": "在 ChatOS 内编写与管理 Markdown 笔记，支持文件夹分类与标签检索。",
+  "backend": { "entry": "backend/index.mjs" },
+  "apps": [
+    {
+      "id": "manager",
+      "name": "记事本",
+      "description": "Markdown 编辑/预览，文件夹分类，标签管理与快速检索。",
+      "entry": { "type": "module", "path": "apps/notepad-manager/index.mjs" },
+      "ai": {
+        "mcp": {
+          "entry": "apps/notepad-manager/mcp-server.mjs",
+          "command": "node",
+          "allowMain": true,
+          "allowSub": true,
+          "enabled": true,
+          "description": "Notepad MCP server (manage markdown notes with folders & tags)"
+        },
+        "mcpPrompt": {
+          "title": "记事本 · MCP Prompt",
+          "zh": "apps/notepad-manager/mcp-prompt.zh.md",
+          "en": "apps/notepad-manager/mcp-prompt.en.md"
+        }
+      }
+    }
+  ]
+}

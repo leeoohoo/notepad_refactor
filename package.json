@@ -1,0 +1,14 @@
+{
+  "name": "notepad",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "chatos-uiapp dev",
+    "validate": "chatos-uiapp validate",
+    "pack": "chatos-uiapp pack",
+    "install:chatos": "chatos-uiapp install --host-app chatos"
+  },
+  "devDependencies": {
+    "@leeoohoo/ui-apps-devkit": "^0.1.1"
+  }
+}

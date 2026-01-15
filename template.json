@@ -1,0 +1,7 @@
+{
+  "description": "Notepad 插件脚手架：module 应用 + backend + MCP 示例",
+  "defaults": {
+    "appId": "manager",
+    "withBackend": true
+  }
+}

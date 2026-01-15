@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+.chatos/
+*.log
+
+# build outputs (if you add bundling later)
+dist/

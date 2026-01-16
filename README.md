@@ -68,5 +68,5 @@ npm run pack
 
 ## 启用 MCP（可选）
 
-本插件已在 `plugin/plugin.json` 启用 `ai.mcp` 与 `ai.mcpPrompt`（入口位于 `plugin/apps/notepad-manager/mcp-server.mjs`）。
-如果你需要打包 MCP，请在 build 阶段做 bundle（把 `@modelcontextprotocol/sdk`、`zod` 等依赖打进单文件）。
+本插件已在 `plugin/plugin.json` 启用 `ai.mcp` 与 `ai.mcpPrompt`（入口为 bundle 文件 `plugin/apps/notepad-manager/mcp-server.bundle.mjs`，源码位于 `plugin/apps/notepad-manager/mcp-server.mjs`）。
+`npm run build:mcp` 会生成 MCP bundle；`pack` / `install:chatos` 已自动执行该步骤。

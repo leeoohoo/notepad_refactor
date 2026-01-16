@@ -23,6 +23,8 @@ export function mount({ container, host, slots }) {
     btnSave,
     btnDelete,
     btnCopy,
+    btnCopyMd,
+    btnCopyDocx,
     btnToggleEdit,
     createHint,
     searchInput,
@@ -38,13 +40,14 @@ export function mount({ container, host, slots }) {
     setStatus,
   } = createNotepadManagerUi({ container, slots, ctx, bridgeEnabled });
   const layoutBreakpoint = 960;
+  const compactLayoutBreakpoint = 520;
   const isCompactSurface = ctx?.surface === 'compact';
   let layoutObserver = null;
   let layoutResizeHandler = null;
 
   const resolveLayout = (width) => {
-    if (isCompactSurface) return 'stacked';
-    return width <= layoutBreakpoint ? 'stacked' : 'split';
+    const breakpoint = isCompactSurface ? compactLayoutBreakpoint : layoutBreakpoint;
+    return width <= breakpoint ? 'stacked' : 'split';
   };
 
   const applyLayout = (width) => {
@@ -91,6 +94,10 @@ export function mount({ container, host, slots }) {
   let editorMode = 'preview';
   let copying = false;
   let copyFeedbackTimer = null;
+  let exporting = false;
+  let exportFeedbackTimer = null;
+  let exportingDocx = false;
+  let docxFeedbackTimer = null;
   let activeTreeKey = '';
   const NOTE_KEY_PREFIX = '__note__:';
   const noteIndex = new Map();
@@ -133,6 +140,26 @@ export function mount({ container, host, slots }) {
     copyFeedbackTimer = null;
   };
 
+  const clearExportFeedbackTimer = () => {
+    if (!exportFeedbackTimer) return;
+    try {
+      clearTimeout(exportFeedbackTimer);
+    } catch {
+      // ignore
+    }
+    exportFeedbackTimer = null;
+  };
+
+  const clearDocxFeedbackTimer = () => {
+    if (!docxFeedbackTimer) return;
+    try {
+      clearTimeout(docxFeedbackTimer);
+    } catch {
+      // ignore
+    }
+    docxFeedbackTimer = null;
+  };
+
   const flashCopyFeedback = (text) => {
     if (!btnCopy) return;
     const original = '复制';
@@ -144,6 +171,28 @@ export function mount({ container, host, slots }) {
     }, 1000);
   };
 
+  const flashExportFeedback = (text) => {
+    if (!btnCopyMd) return;
+    const original = '导出MD';
+    btnCopyMd.textContent = text;
+    clearExportFeedbackTimer();
+    exportFeedbackTimer = setTimeout(() => {
+      exportFeedbackTimer = null;
+      btnCopyMd.textContent = original;
+    }, 1000);
+  };
+
+  const flashDocxFeedback = (text) => {
+    if (!btnCopyDocx) return;
+    const original = '导出Word';
+    btnCopyDocx.textContent = text;
+    clearDocxFeedbackTimer();
+    docxFeedbackTimer = setTimeout(() => {
+      docxFeedbackTimer = null;
+      btnCopyDocx.textContent = original;
+    }, 1000);
+  };
+
   const syncEditorControls = () => {
     const hasNote = Boolean(currentNote);
     const editable = controlsEnabled && hasNote && editorMode === 'edit';
@@ -151,6 +200,8 @@ export function mount({ container, host, slots }) {
     setButtonEnabled(btnSave, editable);
     setButtonEnabled(btnDelete, controlsEnabled && hasNote);
     setButtonEnabled(btnCopy, controlsEnabled && hasNote && !copying);
+    setButtonEnabled(btnCopyMd, controlsEnabled && hasNote && !exporting);
+    setButtonEnabled(btnCopyDocx, controlsEnabled && hasNote && !exportingDocx);
     setButtonEnabled(btnToggleEdit, controlsEnabled && hasNote);
 
     titleInput.disabled = !editable;
@@ -192,6 +243,499 @@ export function mount({ container, host, slots }) {
     const ok = document.execCommand('copy');
     document.body.removeChild(el);
     if (!ok) throw new Error('copy failed');
+  };
+
+  const sanitizeFileName = (value) => {
+    const base = normalizeString(value);
+    if (!base) return 'note';
+    const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim();
+    return cleaned || 'note';
+  };
+
+  const buildMarkdownFileName = (note) => {
+    const base = sanitizeFileName(note?.title || '');
+    return base.toLowerCase().endsWith('.md') ? base : `${base}.md`;
+  };
+
+  const buildDocxFileName = (note) => {
+    const base = sanitizeFileName(note?.title || '');
+    return base.toLowerCase().endsWith('.docx') ? base : `${base}.docx`;
+  };
+
+  const downloadBlob = (blob, fileName) => {
+    if (typeof document === 'undefined' || typeof URL === 'undefined') {
+      throw new Error('download not supported');
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }, 1000);
+  };
+
+  const downloadMarkdown = (content, fileName) => {
+    const text = typeof content === 'string' ? content : String(content ?? '');
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    downloadBlob(blob, fileName || 'note.md');
+  };
+
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const textEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+  const encodeUtf8 = (value) => {
+    const text = typeof value === 'string' ? value : String(value ?? '');
+    if (textEncoder) return textEncoder.encode(text);
+    const encoded = unescape(encodeURIComponent(text));
+    const out = new Uint8Array(encoded.length);
+    for (let i = 0; i < encoded.length; i += 1) out[i] = encoded.charCodeAt(i);
+    return out;
+  };
+
+  const escapeXml = (value) =>
+    String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+  const DOCX_MONO_FONT = 'Consolas';
+  const INLINE_TOKEN_RE = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|!\[[^\]]*]\([^)]+\)|\[[^\]]+]\([^)]+\))/g;
+  const HEADING_SIZES = [32, 28, 24, 22, 20, 18];
+
+  const tokenizeInline = (text) => {
+    const out = [];
+    const value = String(text ?? '');
+    let lastIndex = 0;
+    let match = null;
+    INLINE_TOKEN_RE.lastIndex = 0;
+    while ((match = INLINE_TOKEN_RE.exec(value)) !== null) {
+      if (match.index > lastIndex) {
+        out.push({ text: value.slice(lastIndex, match.index), style: {} });
+      }
+      const token = match[0] || '';
+      if (token.startsWith('`')) {
+        out.push({ text: token.slice(1, -1), style: { font: DOCX_MONO_FONT } });
+      } else if (token.startsWith('**')) {
+        out.push({ text: token.slice(2, -2), style: { bold: true } });
+      } else if (token.startsWith('*')) {
+        out.push({ text: token.slice(1, -1), style: { italic: true } });
+      } else if (token.startsWith('![')) {
+        const imageMatch = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (imageMatch) {
+          const alt = imageMatch[1] || 'image';
+          const url = imageMatch[2] || '';
+          out.push({ text: `${alt} (${url})`, style: { italic: true } });
+        } else {
+          out.push({ text: token, style: {} });
+        }
+      } else if (token.startsWith('[')) {
+        const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+        if (linkMatch) {
+          const label = linkMatch[1] || '';
+          const url = linkMatch[2] || '';
+          out.push({ text: label, style: { underline: true, color: '0000FF' } });
+          if (url) out.push({ text: ` (${url})`, style: {} });
+        } else {
+          out.push({ text: token, style: {} });
+        }
+      } else {
+        out.push({ text: token, style: {} });
+      }
+      lastIndex = match.index + token.length;
+    }
+    if (lastIndex < value.length) {
+      out.push({ text: value.slice(lastIndex), style: {} });
+    }
+    return out;
+  };
+
+  const buildRun = (text, style = {}) => {
+    const value = String(text ?? '');
+    if (!value) return '';
+    const props = [];
+    if (style.bold) props.push('<w:b/>');
+    if (style.italic) props.push('<w:i/>');
+    if (style.underline) props.push('<w:u w:val="single"/>');
+    if (style.color) props.push(`<w:color w:val="${style.color}"/>`);
+    if (style.font) {
+      props.push(
+        `<w:rFonts w:ascii="${style.font}" w:hAnsi="${style.font}" w:cs="${style.font}"/>`
+      );
+    }
+    if (style.size) props.push(`<w:sz w:val="${style.size}"/>`);
+    const rPr = props.length ? `<w:rPr>${props.join('')}</w:rPr>` : '';
+    return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r>`;
+  };
+
+  const renderInlineRuns = (text, baseStyle = {}) => {
+    const segments = tokenizeInline(text);
+    if (!segments.length) return '';
+    return segments
+      .map((seg) => buildRun(seg.text, { ...baseStyle, ...seg.style }))
+      .join('');
+  };
+
+  const buildRunsFromLines = (lines, { baseStyle = {}, code = false } = {}) => {
+    const out = [];
+    const list = Array.isArray(lines) ? lines : [];
+    list.forEach((line, index) => {
+      const text = String(line ?? '');
+      if (code) {
+        const safe = text === '' ? ' ' : text;
+        out.push(buildRun(safe, { ...baseStyle, font: DOCX_MONO_FONT }));
+      } else {
+        out.push(renderInlineRuns(text, baseStyle));
+      }
+      if (index < list.length - 1) out.push('<w:r><w:br/></w:r>');
+    });
+    return out.join('');
+  };
+
+  const renderParagraphFromRuns = (
+    runs,
+    { indent, hanging, spacingBefore, spacingAfter, shading } = {}
+  ) => {
+    const pPrParts = [];
+    if (indent) {
+      const hangingAttr = hanging ? ` w:hanging="${hanging}"` : '';
+      pPrParts.push(`<w:ind w:left="${indent}"${hangingAttr}/>`);
+    }
+    if (spacingBefore || spacingAfter) {
+      const beforeAttr = spacingBefore ? ` w:before="${spacingBefore}"` : '';
+      const afterAttr = spacingAfter ? ` w:after="${spacingAfter}"` : '';
+      pPrParts.push(`<w:spacing${beforeAttr}${afterAttr}/>`);
+    }
+    if (shading) {
+      pPrParts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`);
+    }
+    const pPr = pPrParts.length ? `<w:pPr>${pPrParts.join('')}</w:pPr>` : '';
+    const safeRuns = runs || '<w:r><w:t xml:space="preserve"></w:t></w:r>';
+    return `<w:p>${pPr}${safeRuns}</w:p>`;
+  };
+
+  const renderParagraph = (lines, { baseStyle, indent, hanging, code, shading, spacingAfter } = {}) => {
+    const runs = buildRunsFromLines(lines, { baseStyle, code });
+    return renderParagraphFromRuns(runs, {
+      indent,
+      hanging,
+      shading: shading || (code ? 'EFEFEF' : undefined),
+      spacingAfter,
+    });
+  };
+
+  const parseMarkdownBlocks = (md) => {
+    const text = String(md ?? '').replace(/\r\n/g, '\n');
+    const lines = text.split('\n');
+    const blocks = [];
+    let paragraph = [];
+    let inCode = false;
+    let codeLines = [];
+    let listMode = '';
+    let listItems = [];
+
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      blocks.push({ type: 'paragraph', lines: paragraph.slice() });
+      paragraph = [];
+    };
+
+    const closeList = () => {
+      if (!listMode) return;
+      blocks.push({ type: listMode, items: listItems.slice() });
+      listMode = '';
+      listItems = [];
+    };
+
+    lines.forEach((rawLine) => {
+      const line = String(rawLine ?? '');
+      const trimmedEnd = line.trimEnd();
+      const trimmed = trimmedEnd.trim();
+
+      const fence = trimmed.match(/^```(\S+)?\s*$/);
+      if (fence) {
+        flushParagraph();
+        closeList();
+        if (!inCode) {
+          inCode = true;
+          codeLines = [];
+        } else {
+          inCode = false;
+          blocks.push({ type: 'code', lines: codeLines.slice() });
+          codeLines = [];
+        }
+        return;
+      }
+
+      if (inCode) {
+        codeLines.push(trimmedEnd);
+        return;
+      }
+
+      if (!trimmed) {
+        flushParagraph();
+        closeList();
+        return;
+      }
+
+      const heading = trimmedEnd.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        flushParagraph();
+        closeList();
+        blocks.push({ type: 'heading', level: Math.min(6, heading[1].length), text: heading[2] });
+        return;
+      }
+
+      const quote = trimmedEnd.match(/^>\s?(.*)$/);
+      if (quote) {
+        flushParagraph();
+        closeList();
+        blocks.push({ type: 'blockquote', text: quote[1] || '' });
+        return;
+      }
+
+      const ul = trimmed.match(/^[-*+]\s+(.+)$/);
+      if (ul) {
+        flushParagraph();
+        if (listMode && listMode !== 'ul') closeList();
+        if (!listMode) listMode = 'ul';
+        listItems.push(ul[1]);
+        return;
+      }
+
+      const ol = trimmed.match(/^\d+\.\s+(.+)$/);
+      if (ol) {
+        flushParagraph();
+        if (listMode && listMode !== 'ol') closeList();
+        if (!listMode) listMode = 'ol';
+        listItems.push(ol[1]);
+        return;
+      }
+
+      paragraph.push(trimmedEnd);
+    });
+
+    flushParagraph();
+    closeList();
+    if (inCode) {
+      blocks.push({ type: 'code', lines: codeLines.slice() });
+    }
+    return blocks;
+  };
+
+  const renderListItem = (prefix, text) => {
+    const runs = buildRun(prefix) + renderInlineRuns(text);
+    return renderParagraphFromRuns(runs, { indent: 720, hanging: 360 });
+  };
+
+  const renderDocxBlock = (block) => {
+    if (!block) return '';
+    switch (block.type) {
+      case 'heading': {
+        const size = HEADING_SIZES[Math.min(6, Math.max(1, block.level || 1)) - 1] || 24;
+        return renderParagraph([block.text || ''], {
+          baseStyle: { bold: true, size },
+          spacingAfter: 120,
+        });
+      }
+      case 'blockquote':
+        return renderParagraph([block.text || ''], {
+          baseStyle: { italic: true, color: '666666' },
+          indent: 720,
+        });
+      case 'code':
+        return renderParagraph(block.lines || [''], {
+          baseStyle: { font: DOCX_MONO_FONT, size: 20 },
+          indent: 720,
+          code: true,
+        });
+      case 'ul':
+        return (block.items || []).map((item) => renderListItem('• ', item)).join('');
+      case 'ol':
+        return (block.items || [])
+          .map((item, index) => renderListItem(`${index + 1}. `, item))
+          .join('');
+      case 'paragraph':
+      default:
+        return renderParagraph(block.lines || ['']);
+    }
+  };
+
+  const buildDocxDocumentXml = (content) => {
+    const blocks = parseMarkdownBlocks(content);
+    const body = blocks.length ? blocks.map((block) => renderDocxBlock(block)).join('') : renderParagraph(['']);
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${body}
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+  };
+
+  const buildDocxFiles = (content, { title, now } = {}) => {
+    const safeTitle = escapeXml(title || '');
+    const stamp = (now || new Date()).toISOString();
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+    const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+    const coreProps = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:dcmitype="http://purl.org/dc/dcmitype/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${safeTitle}</dc:title>
+  <dc:creator>ChatOS Notepad</dc:creator>
+  <cp:lastModifiedBy>ChatOS Notepad</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${stamp}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${stamp}</dcterms:modified>
+</cp:coreProperties>`;
+    const appProps = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+  xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>ChatOS Notepad</Application>
+</Properties>`;
+    const documentRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+    return [
+      { name: '[Content_Types].xml', data: encodeUtf8(contentTypes) },
+      { name: '_rels/.rels', data: encodeUtf8(rootRels) },
+      { name: 'docProps/core.xml', data: encodeUtf8(coreProps) },
+      { name: 'docProps/app.xml', data: encodeUtf8(appProps) },
+      { name: 'word/document.xml', data: encodeUtf8(buildDocxDocumentXml(content)) },
+      { name: 'word/_rels/document.xml.rels', data: encodeUtf8(documentRels) },
+    ];
+  };
+
+  const getDosDateTime = (date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const hours = date.getHours();
+    const minutes = date.getMinutes();
+    const seconds = date.getSeconds();
+    const dosTime = (hours << 11) | (minutes << 5) | Math.floor(seconds / 2);
+    const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+    return { dosTime, dosDate };
+  };
+
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let c = i;
+      for (let k = 0; k < 8; k += 1) {
+        c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      }
+      table[i] = c >>> 0;
+    }
+    return table;
+  })();
+
+  const crc32 = (data) => {
+    let crc = 0xffffffff;
+    for (let i = 0; i < data.length; i += 1) {
+      crc = CRC32_TABLE[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+
+  const createZipBlob = (files, { now, mime } = {}) => {
+    const stamp = now instanceof Date ? now : new Date();
+    const { dosTime, dosDate } = getDosDateTime(stamp);
+    const localChunks = [];
+    const centralChunks = [];
+    let offset = 0;
+    let centralSize = 0;
+    const generalPurposeFlag = 0x0800;
+    files.forEach((file) => {
+      const nameBytes = encodeUtf8(file.name);
+      const data = file.data || new Uint8Array();
+      const crc = crc32(data);
+      const localHeader = new Uint8Array(30 + nameBytes.length);
+      const localView = new DataView(localHeader.buffer);
+      localView.setUint32(0, 0x04034b50, true);
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, generalPurposeFlag, true);
+      localView.setUint16(8, 0, true);
+      localView.setUint16(10, dosTime, true);
+      localView.setUint16(12, dosDate, true);
+      localView.setUint32(14, crc, true);
+      localView.setUint32(18, data.length, true);
+      localView.setUint32(22, data.length, true);
+      localView.setUint16(26, nameBytes.length, true);
+      localView.setUint16(28, 0, true);
+      localHeader.set(nameBytes, 30);
+      localChunks.push(localHeader, data);
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const centralView = new DataView(centralHeader.buffer);
+      centralView.setUint32(0, 0x02014b50, true);
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, generalPurposeFlag, true);
+      centralView.setUint16(10, 0, true);
+      centralView.setUint16(12, dosTime, true);
+      centralView.setUint16(14, dosDate, true);
+      centralView.setUint32(16, crc, true);
+      centralView.setUint32(20, data.length, true);
+      centralView.setUint32(24, data.length, true);
+      centralView.setUint16(28, nameBytes.length, true);
+      centralView.setUint16(30, 0, true);
+      centralView.setUint16(32, 0, true);
+      centralView.setUint16(34, 0, true);
+      centralView.setUint16(36, 0, true);
+      centralView.setUint32(38, 0, true);
+      centralView.setUint32(42, offset, true);
+      centralHeader.set(nameBytes, 46);
+      centralChunks.push(centralHeader);
+      centralSize += centralHeader.length;
+      offset += localHeader.length + data.length;
+    });
+    const centralOffset = offset;
+    const endRecord = new Uint8Array(22);
+    const endView = new DataView(endRecord.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, files.length, true);
+    endView.setUint16(10, files.length, true);
+    endView.setUint32(12, centralSize, true);
+    endView.setUint32(16, centralOffset, true);
+    endView.setUint16(20, 0, true);
+    return new Blob([...localChunks, ...centralChunks, endRecord], { type: mime || 'application/zip' });
+  };
+
+  const createDocxBlob = (content, { title, now } = {}) => {
+    const files = buildDocxFiles(content, { title, now });
+    return createZipBlob(files, { now, mime: DOCX_MIME });
+  };
+
+  const downloadDocx = (content, fileName, meta) => {
+    const blob = createDocxBlob(content, meta);
+    downloadBlob(blob, fileName || 'note.docx');
   };
 
   const setControlsEnabled = (enabled) => {
@@ -946,6 +1490,36 @@ export function mount({ container, host, slots }) {
       syncEditorControls();
     }
   });
+  btnCopyMd.addEventListener('click', () => {
+    if (disposed || !currentNote || exporting) return;
+    exporting = true;
+    syncEditorControls();
+    try {
+      const fileName = buildMarkdownFileName(currentNote);
+      downloadMarkdown(currentContent || '', fileName);
+      flashExportFeedback('已导出');
+    } catch {
+      flashExportFeedback('导出失败');
+    } finally {
+      exporting = false;
+      syncEditorControls();
+    }
+  });
+  btnCopyDocx.addEventListener('click', () => {
+    if (disposed || !currentNote || exportingDocx) return;
+    exportingDocx = true;
+    syncEditorControls();
+    try {
+      const fileName = buildDocxFileName(currentNote);
+      downloadDocx(currentContent || '', fileName, { title: currentNote?.title || '' });
+      flashDocxFeedback('已导出');
+    } catch {
+      flashDocxFeedback('导出失败');
+    } finally {
+      exportingDocx = false;
+      syncEditorControls();
+    }
+  });
 
   searchInput.addEventListener('input', async () => {
     if (disposed) return;
@@ -1077,6 +1651,8 @@ export function mount({ container, host, slots }) {
   return () => {
     disposed = true;
     clearCopyFeedbackTimer();
+    clearExportFeedbackTimer();
+    clearDocxFeedbackTimer();
     if (searchDebounceTimer) {
       try {
         clearTimeout(searchDebounceTimer);
@@ -1104,5 +1680,3 @@ export function mount({ container, host, slots }) {
     closeActiveLayer();
   };
 }
-
-

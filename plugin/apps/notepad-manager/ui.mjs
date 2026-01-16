@@ -12,6 +12,7 @@ export function createNotepadManagerUi({ container, slots, ctx, bridgeEnabled })
   const root = document.createElement('div');
   root.className = 'np-root';
   root.dataset.editorMode = 'preview';
+  root.dataset.surface = ctx?.surface || 'full';
   root.appendChild(style);
 
   const header = document.createElement('div');
@@ -72,6 +73,18 @@ export function createNotepadManagerUi({ container, slots, ctx, bridgeEnabled })
   btnCopy.className = 'np-btn';
   btnCopy.textContent = '复制';
   btnCopy.title = '复制当前笔记内容';
+
+  const btnCopyMd = document.createElement('button');
+  btnCopyMd.type = 'button';
+  btnCopyMd.className = 'np-btn';
+  btnCopyMd.textContent = '导出MD';
+  btnCopyMd.title = '导出当前笔记为 Markdown 文件';
+
+  const btnCopyDocx = document.createElement('button');
+  btnCopyDocx.type = 'button';
+  btnCopyDocx.className = 'np-btn';
+  btnCopyDocx.textContent = '导出Word';
+  btnCopyDocx.title = '导出当前笔记为 Word (.docx) 文件';
 
   const btnToggleEdit = document.createElement('button');
   btnToggleEdit.type = 'button';
@@ -164,6 +177,8 @@ export function createNotepadManagerUi({ container, slots, ctx, bridgeEnabled })
   rightHeaderActions.className = 'np-row';
   rightHeaderActions.appendChild(btnToggleEdit);
   rightHeaderActions.appendChild(btnCopy);
+  rightHeaderActions.appendChild(btnCopyMd);
+  rightHeaderActions.appendChild(btnCopyDocx);
   rightHeaderActions.appendChild(btnSave);
   rightHeaderActions.appendChild(btnDelete);
   rightHeader.appendChild(rightHeaderTitle);
@@ -262,6 +277,8 @@ export function createNotepadManagerUi({ container, slots, ctx, bridgeEnabled })
     btnSave,
     btnDelete,
     btnCopy,
+    btnCopyMd,
+    btnCopyDocx,
     btnToggleEdit,
     statusPill,
     createHint,

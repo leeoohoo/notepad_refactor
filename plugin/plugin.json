@@ -11,7 +11,11 @@
       "id": "manager",
       "name": "记事本",
       "description": "Markdown 编辑/预览，文件夹分类，标签管理与快速检索。",
-      "entry": { "type": "module", "path": "apps/notepad-manager/index.mjs" },
+      "entry": {
+        "type": "module",
+        "path": "apps/notepad-manager/index.mjs",
+        "compact": { "type": "module", "path": "apps/notepad-manager/compact.mjs" }
+      },
       "ai": {
         "mcp": {
           "entry": "apps/notepad-manager/mcp-server.mjs",

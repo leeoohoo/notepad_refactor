@@ -10,7 +10,7 @@
     "install:chatos": "npm run build:mcp && chatos-uiapp install --host-app chatos"
   },
   "devDependencies": {
-    "@leeoohoo/ui-apps-devkit": "^0.1.1",
+    "@leeoohoo/ui-apps-devkit": "^0.1.3",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "esbuild": "^0.25.12",
     "zod": "^4.3.5"

@@ -107,6 +107,13 @@ export function mount({ container, host, slots }) {
   let searchDebounceTimer = null;
   let searchWasActive = false;
   let expandedKeysBeforeSearch = null;
+  const AUTO_REFRESH_INTERVAL_MS = 5000;
+  const AUTO_REFRESH_MIN_GAP_MS = 1500;
+  let autoRefreshTimer = null;
+  let autoRefreshInFlight = false;
+  let lastAutoRefreshAt = 0;
+  let visibilityHandler = null;
+  let focusHandler = null;
 
   const makeNoteKey = (folder, id) => {
     const noteId = normalizeString(id);
@@ -1317,6 +1324,72 @@ export function mount({ container, host, slots }) {
     renderFolderList();
   };
 
+  const isPageVisible = () => {
+    if (typeof document === 'undefined') return true;
+    if (typeof document.visibilityState === 'string') return document.visibilityState !== 'hidden';
+    return true;
+  };
+
+  const runAutoRefresh = async (_reason, { force = false } = {}) => {
+    if (disposed || !bridgeEnabled) return;
+    if (!force && !isPageVisible()) return;
+    if (autoRefreshInFlight) return;
+    const now = Date.now();
+    if (!force && now - lastAutoRefreshAt < AUTO_REFRESH_MIN_GAP_MS) return;
+    lastAutoRefreshAt = now;
+    autoRefreshInFlight = true;
+    try {
+      await refreshFoldersAndTags();
+      await refreshNotes();
+    } finally {
+      autoRefreshInFlight = false;
+    }
+  };
+
+  const startAutoRefresh = () => {
+    if (autoRefreshTimer) return;
+    autoRefreshTimer = setInterval(() => {
+      runAutoRefresh('interval');
+    }, AUTO_REFRESH_INTERVAL_MS);
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      visibilityHandler = () => {
+        if (document.visibilityState === 'visible') runAutoRefresh('visibility', { force: true });
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
+    }
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      focusHandler = () => runAutoRefresh('focus', { force: true });
+      window.addEventListener('focus', focusHandler);
+    }
+  };
+
+  const stopAutoRefresh = () => {
+    if (autoRefreshTimer) {
+      try {
+        clearInterval(autoRefreshTimer);
+      } catch {
+        // ignore
+      }
+      autoRefreshTimer = null;
+    }
+    if (visibilityHandler && typeof document !== 'undefined' && document.removeEventListener) {
+      try {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+      } catch {
+        // ignore
+      }
+    }
+    visibilityHandler = null;
+    if (focusHandler && typeof window !== 'undefined' && window.removeEventListener) {
+      try {
+        window.removeEventListener('focus', focusHandler);
+      } catch {
+        // ignore
+      }
+    }
+    focusHandler = null;
+  };
+
   const openNote = async (id) => {
     const seq = (openNoteSeq += 1);
     let res = null;
@@ -1640,6 +1713,7 @@ export function mount({ container, host, slots }) {
       updateCreateHint();
       setStatus('Notes: ready', 'ok');
       setControlsEnabled(true);
+      startAutoRefresh();
       renderEditor(true);
     } catch (err) {
       setStatus(`Notes: ${err?.message || String(err)}`, 'bad');
@@ -1677,6 +1751,7 @@ export function mount({ container, host, slots }) {
       }
       layoutResizeHandler = null;
     }
+    stopAutoRefresh();
     closeActiveLayer();
   };
 }
